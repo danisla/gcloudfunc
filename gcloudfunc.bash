@@ -1,3 +1,101 @@
+function _gke_select_cluster() {
+  IFS=';' read -ra clusters <<< "$(gcloud container clusters list --uri | sort -k9 -t/ | tr '\n' ';')"
+  local count=1
+  for i in ${clusters[@]}; do
+    IFS="/" read -ra TOKS <<< "${i}"
+    echo "  $count) ${TOKS[-1]} (${TOKS[-3]})" >&2
+    ((count=count+1))
+  done
+  local sel=0
+  while [[ $sel -lt 1 || $sel -ge $count ]]; do
+    read -p "Select a GKE cluster: " sel >&2
+  done
+  echo "${clusters[(sel-1)]}"
+}
+
+function _gcp-orgs() {
+	gcloud organizations list --format json
+}
+
+function _gcp-billing() {
+	gcloud beta billing accounts list --format json
+}
+
+function _gcp-project-inputs() {
+  ORGS_JSON=$(_gcp-orgs)
+  BILLING_JSON=$(_gcp-billing)
+
+	DEFAULT_PROJECT="${USER}-demo-$(openssl rand -hex 2)"
+	read -p "Enter project ID (default: ${DEFAULT_PROJECT}): " PROJECT_ID
+
+	PROJECT_ID=${PROJECT_ID:-${DEFAULT_PROJECT}}
+	jq -r 'to_entries[] | "  \(.key+1): \(.value.displayName)  \(.value.name|split("/")|.[1])"' <<< ${ORGS_JSON} 1>&2
+
+	read -p "Select organziation (default: 1): " ORG_NUM
+	ORG_NUM=${ORG_NUM:-"1"}
+	
+    jq -r 'to_entries[] | "  \(.key+1): \(.value.displayName)  \(.value.name|split("/")[1])"' <<< ${BILLING_JSON} 1>&2
+	read -p "Select billing account (default: 1): " BILLING_ACCOUNT_NUM
+	BILLING_ACCOUNT_NUM=${BILLING_ACCOUNT_NUM:-"1"}
+
+	ORG_ID=$(jq -r ".[${ORG_NUM}-1] | .name|split(\"/\")[1]" <<< ${ORGS_JSON})
+	BILLING_ACCOUNT=$(jq -r ".[${BILLING_ACCOUNT_NUM}-1] | .name|split(\"/\")[1]" <<< ${BILLING_JSON})
+
+	jq -r --arg project_id "${PROJECT_ID}" --arg org_id "${ORG_ID}" --arg billing_account "${BILLING_ACCOUNT}" \
+	  '{"PROJECT_ID": $project_id, "ORG_ID": $org_id, "BILLING_ACCOUNT": $billing_account}' <<< "{}"
+}
+
+function gcloud-make-project() {
+  PROJECT_JSON=$(_gcp-project-inputs)
+  eval $(jq -r 'to_entries[]| "export \(.key)=\(.value)"' <<< "${PROJECT_JSON}")
+
+  mkdir -p "${PROJECT_ID}"
+  cd "${PROJECT_ID}"
+
+  cat > main.tf <<EOF
+provider google {
+}
+
+resource "google_project" "demo" {
+  name            = "${PROJECT_ID}"
+  project_id      = "${PROJECT_ID}"
+  org_id          = "${ORG_ID}"
+  billing_account = "${BILLING_ACCOUNT}"
+}
+
+resource "google_project_service" "cloudresourcemanager" {
+  project = "\${google_project.demo.project_id}"
+  service = "cloudresourcemanager.googleapis.com"
+}
+
+resource "google_project_service" "cloudbilling" {
+  project            = "\${google_project.demo.project_id}"
+  service            = "cloudbilling.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "iam" {
+  project            = "\${google_project.demo.project_id}"
+  service            = "iam.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "compute" {
+  project            = "\${google_project.demo.project_id}"
+  service            = "compute.googleapis.com"
+  disable_on_destroy = false
+}
+
+resource "google_project_service" "container" {
+  project            = "\${google_project.demo.project_id}"
+  service            = "container.googleapis.com"
+  disable_on_destroy = false
+}
+EOF
+  terraform init
+  terraform apply
+}
+
 function gcloud-ssh() {
 	local pattern=${1:-.*}
   shift 1
@@ -45,18 +143,7 @@ function gcloud-ssh() {
 }
 
 function gke-credentials() {
-  IFS=';' read -ra clusters <<< "$(gcloud container clusters list --uri | sort -k9 -t/ | tr '\n' ';')"
-  local count=1
-  for i in ${clusters[@]}; do
-    IFS="/" read -ra TOKS <<< "${i}"
-    echo "  $count) ${TOKS[-1]} (${TOKS[-3]})"
-    ((count=count+1))
-  done
-  local sel=0
-  while [[ $sel -lt 1 || $sel -ge $count ]]; do
-    read -p "Select a GKE cluster: " sel
-  done
-  cluster=${clusters[(sel-1)]}
+  cluster=$(_gke_select_cluster)
   if [[ "${cluster}" =~ zones ]]; then
     gcloud container clusters get-credentials ${cluster}
   else
@@ -69,18 +156,7 @@ function gke-credentials() {
 }
 
 function gke-nat-gateway() {
-  IFS=';' read -ra clusters <<< "$(gcloud container clusters list --uri | sort -k9 -t/ | tr '\n' ';')"
-  local count=1
-  for i in ${clusters[@]}; do
-    IFS="/" read -ra TOKS <<< "${i}"
-    echo "  $count) ${TOKS[-1]} (${TOKS[-3]})"
-    ((count=count+1))
-  done
-  local sel=0
-  while [[ $sel -lt 1 || $sel -ge $count ]]; do
-    read -p "Select a GKE cluster: " sel
-  done
-  cluster=${clusters[(sel-1)]}
+  cluster=$(_gke_select_cluster)
   IFS="/" read -ra TOKS <<< "${cluster}"
   PROJECT=${TOKS[-5]}
   CLUSTER_NAME=${TOKS[-1]}
@@ -155,4 +231,31 @@ EOF
 
   echo "Generated Terraform config in: ${CONFIG_DIR}"
   (export GOOGLE_PROJECT=${PROJECT} && cd ${CONFIG_DIR} && terraform init && terraform apply)
+}
+
+function gke-fix-scopes() {
+  cluster=$(_gke_select_cluster)
+  IFS="/" read -ra TOKS <<< "${cluster}"
+  CLUSTER_NAME=${TOKS[-1]}
+  if [[ "${cluster}" =~ zones ]]; then
+    CLUSTER_JSON=$(gcloud container clusters describe ${cluster} --format=json)
+    # Create new node pool of same machine type with --scopes=cloud-platform
+    # gcloud container node-pools create cloud-platform \
+    #   --cluster=${CLUSTER_NAME} \
+    #   --machine-type=${MACHINE_TYPE} \
+    #   --num-nodes=${NUM_NODES} \
+    #   --zone=${ZONE} \
+    #   --scopes=cloud-platform
+    
+    # # Delete the default node pool
+    # gcloud container node-pools delete default-pool \
+    #   --cluster=${CLUSTER_NAME} \
+    #   --zone=${ZONE}
+  else
+    export CLOUDSDK_CONTAINER_USE_V1_API_CLIENT=false
+    REGION=${TOKS[-3]}
+    CLUSTER_JSON=$(gcloud beta container clusters describe ${CLUSTER_NAME} --region ${REGION} --format=json)
+  fi
+
+  echo $CLUSTER_JSON
 }
