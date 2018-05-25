@@ -97,48 +97,37 @@ EOF
 }
 
 function gcloud-ssh() {
-	local pattern=${1:-.*}
-  shift 1
+  local GCLOUD_ARGS=$@
   local instance
   local instances
-  IFS=';' read -ra instances <<< "$(gcloud compute instances list --filter=name~${pattern} --format='csv[no-heading](name)' | sort | tr '\n' ';')"
-	[[ ${#instances[@]} -eq 0 ]] && echo "ERROR: No instance found matching: ${pattern}" && return 1
+  IFS=';' read -ra instances <<< "$(gcloud compute instances list ${GCLOUD_ARGS} --format='csv[no-heading](name)' | sort | tr '\n' ';')"
+	[[ ${#instances[@]} -eq 0 ]] && echo "ERROR: No instances found" && return 1
 
-	if [[ ${#instances[@]} -eq 1 ]]; then
-    instance=${instances[0]}
-  else
-	  local count=1
-		echo "Multiple instances matched:"
-		for i in ${instances[@]}; do 
-      echo "  $count) $i"
-      ((count=count+1))
-    done
-    local sel=0
-    while [[ $sel -lt 1 || $sel -ge $count ]]; do
-      read -p "Selection: " sel
-    done
-    instance=${instances[(sel-1)]}
-	fi
+  local count=1
+  echo "Instances found:"
+  for i in ${instances[@]}; do 
+    echo "  $count) $i"
+    ((count=count+1))
+  done
+  local sel=0
+  while [[ $sel -lt 1 || $sel -ge $count ]]; do
+    read -p "Selection: " sel
+  done
+  instance=${instances[(sel-1)]}
+
   read -p "Use Bastion Host (y/N)? " bastion_input
   if [[ "${bastion_input,,}" == "y" ]]; then
-    # TODO: List all instances with an external IP.
-    IFS=';' read -ra instances <<< "$(gcloud compute instances list --format='csv[no-heading](name)' | sort | tr '\n' ';')"
-    [[ ${#instances[@]} -eq 0 ]] && echo "ERROR: No bastion instances with external IPs found." && return 1
-    local count=1
-		echo "Instances with external IPs:"
-		for i in ${instances[@]}; do 
-      echo "  $count) $i"
-      ((count=count+1))
-    done
     local sel=0
     while [[ $sel -lt 1 || $sel -ge $count ]]; do
-      read -p "Select bastion instance: " sel
+      read -p "Bastion selection: " sel
     done
     bastion=${instances[(sel-1)]}
-    gcloud compute ssh $(gcloud compute instances list --filter=name~${bastion} --uri) --ssh-flag="-A" -- \
-      ssh -o StrictHostKeyChecking=no ${instance} $@
+    eval `ssh-agent`
+    ssh-add ~/.ssh/google_compute_engine
+    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name~${bastion} --uri) --ssh-flag="-A" -- \
+      ssh -o StrictHostKeyChecking=no ${instance}
   else
-    gcloud compute ssh $(gcloud compute instances list --filter=name~${instance} --uri) $@
+    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name~${instance} --uri)
   fi
 }
 
