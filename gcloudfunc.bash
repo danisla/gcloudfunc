@@ -133,14 +133,14 @@ function gcloud-ssh() {
 
 function gke-credentials() {
   cluster=$(_gke_select_cluster)
+  IFS="/" read -ra TOKS <<< "${cluster}"
+  LOCATION=${TOKS[-3]}
+  CLUSTER_NAME=${TOKS[-1]}
   if [[ "${cluster}" =~ zones ]]; then
-    gcloud container clusters get-credentials ${cluster}
+    gcloud container clusters get-credentials ${cluster} --zone ${LOCATION}
   else
     export CLOUDSDK_CONTAINER_USE_V1_API_CLIENT=false
-    IFS="/" read -ra TOKS <<< "${cluster}"
-    REGION=${TOKS[-3]}
-    CLUSTER_NAME=${TOKS[-1]}
-    gcloud beta container clusters get-credentials ${CLUSTER_NAME} --region ${REGION}
+    gcloud beta container clusters get-credentials ${CLUSTER_NAME} --region ${LOCATION}
   fi
 }
 
