@@ -124,10 +124,10 @@ function gcloud-ssh() {
     bastion=${instances[(sel-1)]}
     eval `ssh-agent`
     ssh-add ~/.ssh/google_compute_engine
-    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name~${bastion} --uri) --ssh-flag="-A" -- \
+    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name=${bastion} --uri) --ssh-flag="-A" -- \
       ssh -o StrictHostKeyChecking=no ${instance}
   else
-    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name~${instance} --uri)
+    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name=${instance} --uri)
   fi
 }
 
