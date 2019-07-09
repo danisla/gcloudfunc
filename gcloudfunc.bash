@@ -248,3 +248,33 @@ function gke-fix-scopes() {
 
   echo $CLUSTER_JSON
 }
+
+function gcloud-sshfs() {
+  local instance
+  local instances
+  IFS=';' read -ra instances <<< "$(gcloud compute instances list ${GCLOUD_ARGS} --format='csv[no-heading](name)' | sort | tr '\n' ';')"
+	[[ ${#instances[@]} -eq 0 ]] && echo "ERROR: No instances found" && return 1
+
+  local count=1
+  echo "Instances found:"
+  for i in ${instances[@]}; do 
+    echo "  $count) $i"
+    ((count=count+1))
+  done
+  local sel=0
+  while [[ $sel -lt 1 || $sel -ge $count ]]; do
+    read -p "Selection: " sel
+  done
+  instance=${instances[(sel-1)]}
+  
+  ip=$(gcloud compute instances list ${GCLOUD_ARGS} --filter=name=${instance} --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
+
+  TARGET_MOUNT=$(id -u -n)@${ip}:/
+  MOUNT_DIR=/mnt/${instance}
+  sudo mkdir -p ${MOUNT_DIR}
+
+  eval sudo sshfs \
+    -o IdentityFile=${HOME}/.ssh/google_compute_engine,allow_other,default_permissions,auto_cache,reconnect,uid=$(id -u),gid=$(id -g) \
+    ${TARGET_MOUNT} ${MOUNT_DIR}
+  [[ $? -eq 0 ]] && echo "INFO: Mounted ${TARGET_MOUNT} to ${MOUNT_DIR}"
+}
