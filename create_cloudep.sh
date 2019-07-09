@@ -19,6 +19,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
+function log() {
+    level=$1
+    msg=$2
+    echo "${level}: $msg" >&2
+}
+
 NAME=$1
 TARGET=$2
 PROJECT=${3:-${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project 2>/dev/null)}}
@@ -40,6 +46,16 @@ x-google-endpoints:
   target: "${TARGET}"
 EOF
 
+log "INFO" "Enabling Service Management API"
+
+gcloud services enable servicemanagement.googleapis.com serviceusage.googleapis.com --project ${PROJECT} >&2
+
+log "INFO" "Forcing undelete of Endpoint Service"
+gcloud endpoints services undelete ${SVC} --project ${PROJECT} >/dev/null 2>&1 || true
+
 gcloud -q endpoints services deploy cloudep.yaml 1>&2
 
+log "INFO" "Cloud Endpoint config ID:"
 gcloud endpoints services describe ${SVC} --format='value(serviceConfig.id)'
+
+log "INFO" "Created Cloud Endpoint: ${SVC}"
