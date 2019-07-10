@@ -278,3 +278,12 @@ function gcloud-sshfs() {
     ${TARGET_MOUNT} ${MOUNT_DIR}
   [[ $? -eq 0 ]] && echo "INFO: Mounted ${TARGET_MOUNT} to ${MOUNT_DIR}"
 }
+
+function gcloud-setup-git-hook() {
+  hookfile=`git rev-parse --git-dir`/hooks/commit-msg
+  mkdir -p $(dirname $hookfile) 
+  curl -Lo $hookfile \
+    https://gerrit-review.googlesource.com/tools/hooks/commit-msg
+  chmod +x $hookfile
+  unset hookfile
+}
