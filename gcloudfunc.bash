@@ -1,5 +1,16 @@
+function _prompt_project_id() {
+  local default=$(gcloud config get-value project 2>/dev/null)
+  [[ -z "${default}" ]] && default="none"
+  read -p "Enter Project ID ($default)): " project_id >&2
+  if [[ -z "${project_id}" ]]; then
+    echo "$default"
+  else
+    echo "$project_id"
+  fi
+}
+
 function _gke_select_cluster() {
-  IFS=';' read -ra clusters <<< "$(gcloud container clusters list --uri | sort -k9 -t/ | tr '\n' ';')"
+  IFS=';' read -ra clusters <<< "$(gcloud container clusters list --uri $@ | sort -k9 -t/ | tr '\n' ';')"
   local count=1
   for i in ${clusters[@]}; do
     IFS="/" read -ra TOKS <<< "${i}"
@@ -132,15 +143,18 @@ function gcloud-ssh() {
 }
 
 function gke-credentials() {
-  cluster=$(_gke_select_cluster)
+  [[ $@ =~ -p ]] && project_id=$(_prompt_project_id)
+  [[ -z "${project_id}" ]] && project_id=$(gcloud config get-value project 2>/dev/null)
+  echo "Project ID: $project_id" >&2
+  cluster=$(_gke_select_cluster --project $project_id)
   IFS="/" read -ra TOKS <<< "${cluster}"
   LOCATION=${TOKS[-3]}
   CLUSTER_NAME=${TOKS[-1]}
   if [[ "${cluster}" =~ zones ]]; then
-    gcloud container clusters get-credentials ${cluster} --zone ${LOCATION}
+    gcloud --project ${project_id} container clusters get-credentials ${cluster} --zone ${LOCATION} ${gcloud_args}
   else
     export CLOUDSDK_CONTAINER_USE_V1_API_CLIENT=false
-    gcloud beta container clusters get-credentials ${CLUSTER_NAME} --region ${LOCATION}
+    gcloud --project ${project_id} beta container clusters get-credentials ${CLUSTER_NAME} --region ${LOCATION} ${gcloud_args}
   fi
 }
 
@@ -286,4 +300,35 @@ function gcloud-setup-git-hook() {
     https://gerrit-review.googlesource.com/tools/hooks/commit-msg
   chmod +x $hookfile
   unset hookfile
+}
+
+function gcr-list-tags() {
+  REPO=${1/gcr.io\/}
+  if [[ -z "${REPO}" ]]; then
+    echo "USAGE: gcr-list-tags <repo name>"
+    return 1
+  fi
+  TOKEN=$(gcloud auth print-access-token)
+  curl -s -XGET \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Accept: application/json" \
+       "https://gcr.io/v2/${REPO}/tags/list" |
+          jq -r '.tags[]' | sort --version-sort
+}
+
+function gcr-get-digest() {
+  IMAGE=$1
+  TAG=${IMAGE/gcr.io*:/}
+  REPO_GCR=${IMAGE/:$TAG/}
+  REPO=${REPO_GCR/gcr.io\//}
+  if [[ -z "${REPO}" || -z "${TAG}" ]]; then
+    echo "USAGE: gcr-get-digest <image:tag>"
+    return 1
+  fi
+  TOKEN=$(gcloud auth print-access-token)
+  curl -s -I \
+    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Accept: */*" \
+    "https://gcr.io/v2/${REPO}/manifests/${TAG}" | \
+    grep docker-content-digest | tr '\n' ' ' | tr '\r' ' ' | cut -d' ' -f2
 }
