@@ -1,3 +1,11 @@
+export CYAN='\033[1;36m'
+export GREEN='\033[1;32m'
+export RED='\033[1;31m'
+export NC='\033[0m' # No Color
+function log_cyan() { echo -e "${CYAN}$@${NC}"; }
+function log_green() { echo -e "${GREEN}$@${NC}"; }
+function log_red() { echo -e "${RED}$@${NC}"; }
+
 function _prompt_project_id() {
   local default=$(gcloud config get-value project 2>/dev/null)
   [[ -z "${default}" ]] && default="none"
@@ -108,11 +116,40 @@ EOF
 }
 
 function gcloud-ssh() {
-  local GCLOUD_ARGS=$@
   local instance
   local instances
-  IFS=';' read -ra instances <<< "$(gcloud compute instances list ${GCLOUD_ARGS} --format='csv[no-heading](name)' | sort | tr '\n' ';')"
-	[[ ${#instances[@]} -eq 0 ]] && echo "ERROR: No instances found" && return 1
+  local project_id=""
+  local ssh_args=""
+
+  while (( "$#" )); do
+    case ${1,,} in
+        "-h")
+            log_cyan "USAGE: gcloud-ssh [-p <project>] [-iap]" >&2
+            return 1
+            ;;
+        "-p")
+            shift
+            project_id=$1
+            ;;
+        "-iap")
+            ssh_args="${ssh_args} --tunnel-through-iap"
+            ;;
+        *) log_red "ERROR: Invalid argument '$1'" && return 1 ;;
+    esac
+    shift
+  done
+
+  if [[ -z "${project_id}" ]]; then
+      log_cyan "INFO: Fetching project ID"
+      project_id=$(gcloud config get-value project 2>/dev/null)
+      [[ -z "${project_id}" ]] && log_red "ERROR: no project set" && return 1
+      log_cyan "INFO: using project: ${project_id}"
+  fi
+
+  export GCLOUD="gcloud --project ${project_id}"
+
+  IFS=';' read -ra instances <<< "$(${GCLOUD} compute instances list --format='csv[no-heading](name)' | sort | tr '\n' ';')"
+  [[ ${#instances[@]} -eq 0 ]] && echo "ERROR: No instances found" && return 1
 
   local count=1
   echo "Instances found:"
@@ -135,10 +172,10 @@ function gcloud-ssh() {
     bastion=${instances[(sel-1)]}
     eval `ssh-agent`
     ssh-add ~/.ssh/google_compute_engine
-    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name=${bastion} --uri) --ssh-flag="-A" -- \
+    ${GCLOUD} compute ssh ${ssh_args} $(${GCLOUD} compute instances list --filter=name=${bastion} --uri) --ssh-flag="-A" -- \
       ssh -o StrictHostKeyChecking=no ${instance}
   else
-    gcloud compute ssh ${GCLOUD_ARGS} $(gcloud compute instances list ${GCLOUD_ARGS} --filter=name=${instance} --uri)
+    ${GCLOUD} compute ssh ${ssh_args} $(${GCLOUD} compute instances list --filter=name=${instance} --uri)
   fi
 }
 
